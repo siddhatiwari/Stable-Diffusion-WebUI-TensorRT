@@ -200,7 +200,6 @@ class Engine:
                 trt_datatype = trt.DataType.HALF
 
             # trt.Weight and trt.TensorLocation
-            refit_weights[trt_weight_name] = refit_weights[trt_weight_name].cpu()
             trt_wt_tensor = trt.Weights(
                 trt_datatype,
                 refit_weights[trt_weight_name].data_ptr(),
@@ -213,14 +212,15 @@ class Engine:
             )
 
             # apply refit
-            # refitter.set_named_weights(trt_weight_name, trt_wt_tensor, trt_wt_location)
-            refitter.set_named_weights(trt_weight_name, trt_wt_tensor)
+            refitter.set_named_weights(trt_weight_name, trt_wt_tensor, trt_wt_location)
             refitted_weights.add(trt_weight_name)
 
         assert set(refitted_weights) == set(refit_weights.keys())
         if not refitter.refit_cuda_engine():
             print("Error: failed to refit new weights.")
             exit(0)
+
+        print(f"[I] Total refitted weights {len(refitted_weights)}.")
 
     def build(
         self,
@@ -240,14 +240,18 @@ class Engine:
             for _p, i_profile in zip(p, input_profile):
                 for name, dims in i_profile.items():
                     assert len(dims) == 3
-                    _p.add(name, min=dims[0], opt=dims[1], max=dims[2])
+                    _p.add(namFe, min=dims[0], opt=dims[1], max=dims[2])
 
         config_kwargs = {}
         if not enable_all_tactics:
             config_kwargs["tactic_sources"] = []
 
         network = network_from_onnx_path(
-            onnx_path, flags=[trt.OnnxParserFlag.NATIVE_INSTANCENORM]
+            onnx_path,
+            flags=[
+                trt.OnnxParserFlag.NATIVE_INSTANCENORM,
+                trt.NetworkDefinitionCreationFlag.STRONGLY_TYPED,
+            ],
         )
         if update_output_names:
             print(f"Updating network outputs to {update_output_names}")
@@ -257,7 +261,6 @@ class Engine:
         config = builder.create_builder_config()
         config.progress_monitor = TQDMProgressMonitor()
 
-        config.set_flag(trt.BuilderFlag.STRICT_TYPES)
         config.set_flag(trt.BuilderFlag.FP16) if fp16 else None
         config.set_flag(trt.BuilderFlag.REFIT) if enable_refit else None
 
@@ -305,53 +308,52 @@ class Engine:
         print(f"Loading TensorRT engine: {self.engine_path}")
         self.engine = engine_from_bytes(bytes_from_path(self.engine_path))
 
-    def activate(self, reuse_device_memory=None):
+    def activate(self, reuse_device_memory=False):
         if reuse_device_memory:
             self.context = self.engine.create_execution_context_without_device_memory()
-        #    self.context.device_memory = reuse_device_memory
         else:
             self.context = self.engine.create_execution_context()
 
     def allocate_buffers(self, shape_dict=None, device="cuda", additional_shapes=None):
         nvtx.range_push("allocate_buffers")
-        for idx in range(self.engine.num_io_tensors):
-            binding = self.engine[idx]
-            if shape_dict and binding in shape_dict:
-                shape = shape_dict[binding].shape
-            elif additional_shapes and binding in additional_shapes:
-                shape = additional_shapes[binding]
+        for binding in range(self.engine.num_io_tensors):
+            name = self.engine.get_tensor_name(binding)
+
+            if shape_dict and name in shape_dict:
+                shape = shape_dict[name].shape
+            elif additional_shapes and name in additional_shapes:
+                shape = additional_shapes[name]
             else:
-                shape = self.context.get_binding_shape(idx)
-            dtype = trt.nptype(self.engine.get_binding_dtype(binding))
-            if self.engine.binding_is_input(binding):
-                self.context.set_binding_shape(idx, shape)
+                shape = self.context.get_tensor_shape(name)
+
+            dtype = trt.nptype(self.engine.get_tensor_dtype(name))
+            if self.engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
+                self.context.set_input_shape(name, shape)
             tensor = torch.zeros(
                 tuple(shape), dtype=numpy_to_torch_dtype_dict[dtype]
             ).to(device=device)
-            self.tensors[binding] = tensor
+            self.tensors[name] = tensor
         nvtx.range_pop()
 
     def infer(self, feed_dict, stream, use_cuda_graph=False):
-        nvtx.range_push("set_tensors")
+
         for name, buf in feed_dict.items():
             self.tensors[name].copy_(buf)
 
         for name, tensor in self.tensors.items():
             self.context.set_tensor_address(name, tensor.data_ptr())
-        nvtx.range_pop()
-        nvtx.range_push("execute")
+
         noerror = self.context.execute_async_v3(stream)
         if not noerror:
-            raise ValueError("ERROR: inference failed.")
-        nvtx.range_pop()
+            raise ValueError(f"ERROR: inference failed.")
+
         return self.tensors
 
     def __str__(self):
         out = ""
         for opt_profile in range(self.engine.num_optimization_profiles):
-            for binding_idx in range(self.engine.num_bindings):
-                name = self.engine.get_binding_name(binding_idx)
+            for binding in range(self.engine.num_io_tensors):
+                name = self.engine.get_tensor_name(binding)
                 shape = self.engine.get_profile_shape(opt_profile, name)
                 out += f"\t{name} = {shape}\n"
         return out
-

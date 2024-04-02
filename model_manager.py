@@ -45,7 +45,7 @@ class ModelManager:
         self.update()
 
     @staticmethod
-    def get_onnx_path(model_name, is_contolnet: bool = False):
+    def get_onnx_path(model_name, is_contolnet: bool = True):
         if is_contolnet:
             model_name = f"{model_name}_cnet"
         onnx_filename = f"{model_name}.onnx"

@@ -2,7 +2,7 @@ import launch
 import sys
 
 python = sys.executable
-
+TRT_VERSION="10.0.0b6"
 
 def install():
     if not launch.is_installed("importlib_metadata"):
@@ -10,7 +10,7 @@ def install():
     from importlib_metadata import version
 
     if launch.is_installed("tensorrt"):
-        if not version("tensorrt") == "9.2.0.post12.dev5":
+        if not version("tensorrt") == TRT_VERSION:
             launch.run(
                 ["python", "-m", "pip", "uninstall", "-y", "tensorrt"],
                 "removing old version of tensorrt",
@@ -19,24 +19,10 @@ def install():
     if not launch.is_installed("tensorrt"):
         print("TensorRT is not installed! Installing...")
         launch.run_pip(
-            "install nvidia-cudnn-cu11==8.9.4.25 --no-cache-dir", "nvidia-cudnn-cu11"
-        )
-        launch.run_pip(
-            "install --pre --extra-index-url https://pypi.nvidia.com tensorrt==9.2.0.post12.dev5 --no-cache-dir",
+            f"install --extra-index-url https://pypi.nvidia.com tensorrt=={TRT_VERSION} --no-cache-dir",
             "tensorrt",
             live=True,
         )
-        launch.run(
-            ["python", "-m", "pip", "uninstall", "-y", "nvidia-cudnn-cu11"],
-            "removing nvidia-cudnn-cu11",
-        )
-
-    if launch.is_installed("nvidia-cudnn-cu11"):
-        if version("nvidia-cudnn-cu11") == "8.9.4.25":
-            launch.run(
-                ["python", "-m", "pip", "uninstall", "-y", "nvidia-cudnn-cu11"],
-                "removing nvidia-cudnn-cu11",
-            )
 
     # Polygraphy
     if not launch.is_installed("polygraphy"):
