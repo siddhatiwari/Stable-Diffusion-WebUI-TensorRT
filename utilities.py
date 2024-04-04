@@ -240,7 +240,7 @@ class Engine:
             for _p, i_profile in zip(p, input_profile):
                 for name, dims in i_profile.items():
                     assert len(dims) == 3
-                    _p.add(namFe, min=dims[0], opt=dims[1], max=dims[2])
+                    _p.add(name, min=dims[0], opt=dims[1], max=dims[2])
 
         config_kwargs = {}
         if not enable_all_tactics:
